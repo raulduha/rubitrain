@@ -17,47 +17,42 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 **Email:** Resend
 **Package manager:** pnpm with Turborepo
 
-> **Status:** SPEC-01 through SPEC-04 are implemented. Migrations applied to Supabase. Web dashboard is fully built and builds cleanly. SPEC-05 (payments) and SPEC-06 (deploy) are pending.
+> **Status:** SPEC-01 through SPEC-04 are implemented. Migrations applied to Supabase. Web dashboard is fully built and builds cleanly. SPEC-03 (mobile), SPEC-05 (payments), and SPEC-06 (deploy) are pending.
 
 ---
 
 ## Implementation Order
 
-Execute specs strictly in order. Each spec builds on the previous:
-
-1. ✅ **SPEC-01** — Supabase schema (3 migrations applied), storage buckets, seed data
+1. ✅ **SPEC-01** — Supabase schema (4 migrations applied), storage buckets, seed data
 2. ✅ **SPEC-02** — Monorepo scaffold, Next.js setup, Supabase auth (email + Google OAuth)
 3. ⏳ **SPEC-03** — Mobile screens (Expo Router) — not started
-4. ✅ **SPEC-04** — Web dashboard complete: clubs, roster, upload (Excel), player detail, billing UI, invitations
-5. ⏳ **SPEC-05** — MercadoPago + WebPay payments — API keys pending
+4. ✅ **SPEC-04** — Web dashboard: clubs, roster, upload (Excel), player detail, billing UI, invitations, player dashboard
+5. ⏳ **SPEC-05** — MercadoPago + WebPay payments — API keys pending (trial buttons active in the meantime)
 6. ⏳ **SPEC-06** — EAS build config, Vercel deploy, GitHub Actions CI
-
-Recommended git workflow: create a branch per spec (`spec-01-database`, etc.), commit, merge to `main`.
 
 ---
 
-## Commands (post-setup)
+## Commands
 
 ```bash
-pnpm install          # Install all workspace dependencies
-pnpm dev              # Run mobile (Expo) + web (Next.js) concurrently
-pnpm build            # Build all apps
+pnpm install               # Install all workspace dependencies
+pnpm dev                   # Run mobile (Expo) + web (Next.js) concurrently
+pnpm --filter web dev      # Run web only
 pnpm --filter web build    # Build web only
-pnpm --filter mobile build # Build mobile only
-pnpm type-check       # TypeScript validation across workspace
-pnpm lint             # ESLint across workspace
+pnpm type-check            # TypeScript validation across workspace
+pnpm lint                  # ESLint across workspace
 
 # Supabase
-supabase db reset                        # Apply migrations + seed
-supabase gen types typescript            # Regenerate DB types into packages/db
-
-# MercadoPago / WebPay (local dev)
-# Webhooks: /api/webhooks/mercadopago  and  /api/billing/webpay-confirm
-# Keys: MERCADOPAGO_ACCESS_TOKEN and WEBPAY_* vars in .env.local (pending)
+supabase gen types typescript   # Regenerate DB types into packages/db
 
 # EAS (mobile builds)
 eas build --platform ios --profile preview
 eas build --platform android --profile preview
+```
+
+If the dev server gives "Cannot find module './XYZ.js'" errors, delete `.next` and restart:
+```bash
+rm -rf apps/web/.next && pnpm --filter web dev
 ```
 
 ---
@@ -65,79 +60,119 @@ eas build --platform android --profile preview
 ## Architecture
 
 ### Authentication & Roles
-Supabase Auth is the identity layer. Supports two sign-in methods:
-- **Email/password** — requires email verification before accessing the app. After signup, user lands on a `verify-email` screen until Supabase confirms the email.
-- **Google OAuth** — via Supabase Google provider (`expo-web-browser` on mobile, standard redirect on web). No email verification step needed.
 
-On signup, a database trigger creates a `profiles` record with role (`physical_trainer`, `coach`, `player`). Players can only register via invitation link. Route protection:
-- **Mobile:** Zustand store + `useAuth` hook manage auth state; Expo Router handles redirects. If session exists but email unconfirmed → redirect to `(auth)/verify-email`.
-- **Web:** `middleware.ts` checks session server-side; SSR Supabase client for protected pages.
+Login page has a role selector (Entrenador/Jugador) as step 1 before the form. The selection determines the post-login redirect:
+- **Entrenador/Preparador** → `/dashboard`
+- **Jugador** → `/dashboard/player`
 
-### Data Access (RLS)
-All 12 tables enforce Row Level Security. Key policies:
-- Physical trainers: full access to their `organizations` and all downstream data
-- Coaches: read/write access to their assigned teams only
-- Players: read-only access to their own records
+Roles in `profiles.role`: `physical_trainer`, `coach`, `player`. A user can hold any role in `profiles` while also having player memberships in teams — the login selector determines which view they see, not `profiles.role`. **Do not use `profiles.role` to gate dashboard routing.**
 
-### Mobile Routing (Expo Router)
-File-based routing under `apps/mobile/src/app/`:
-- `(auth)/` — login, register, forgot-password (unauthenticated)
-- `(tabs)/` — bottom tab nav: dashboard, roster, matches, training, profile
-- `player/[id]`, `session/[id]` — dynamic detail screens
+Players can only register via invitation link (`/join?token=...`). The invitation flow:
+1. Coach sends invite → `invitations` table entry created, email via Resend
+2. Player opens link → chooses "Crear cuenta" or "Ya tengo cuenta"
+3. On accept → `team_memberships` row created, redirect to `/verify-email` (new account) or `/dashboard/player` (existing account)
+4. `accept_invitation` RPC handles the DB work; it does NOT update `profiles.role`
+
+### Critical: RLS bypass pattern
+
+**All server components in `/dashboard/*` use `createAdminClient()` for DB reads.** The RLS policies have a recursive dependency (`teams` ↔ `team_memberships` ↔ `organizations`) that causes queries to silently return `null` when using the user client. Migration `004_fix_rls_recursion.sql` partially addresses this with a `SECURITY DEFINER` function, but the reliable fix is using the admin client for reads.
+
+```typescript
+// ✅ Correct — use in all dashboard server components
+const admin = await createAdminClient()
+const { data } = await (admin as any).from('teams').select('...')
+
+// ❌ Avoid for dashboard DB reads — RLS recursion silently returns null
+const supabase = await createClient()
+const { data } = await supabase.from('teams').select('...')
+```
+
+`createClient()` is still used for `supabase.auth.getUser()` (session validation only).
+
+### `createAdminClient` implementation
+
+Uses `createClient` from `@supabase/supabase-js` (plain), NOT `createServerClient` from `@supabase/ssr`. The SSR package reads cookies and can override the auth header with the user's JWT, negating the service role key.
+
+```typescript
+// apps/web/src/lib/supabase/server.ts
+export async function createAdminClient() {
+  return createSupabaseClient<Database>(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.SUPABASE_SERVICE_ROLE_KEY!,
+    { auth: { autoRefreshToken: false, persistSession: false } },
+  )
+}
+```
 
 ### Web Routing (Next.js App Router)
-Under `apps/web/src/app/`:
-- `/login`, `/register`, `/verify-email` — flat auth routes (NOT a route group)
-- `/dashboard/` — all protected routes: clubs, clubs/[id], roster/[teamId], upload/training, upload/matches, player/[id], billing
-- `/join` — public invitation acceptance page (`?token=...`)
-- `/` — public landing page
-- `middleware.ts` — guards `/dashboard/*`
 
-> **Important:** Auth pages are flat routes, not `(auth)/` route groups. Dashboard is `/dashboard/` (real directory), not `(dashboard)/`. Using route groups caused a 404 bug — do not revert.
+Under `apps/web/src/app/`:
+- `(auth)/login`, `(auth)/register`, `(auth)/verify-email` — auth routes (route group, no shared layout)
+- `/dashboard/` — protected routes: page, clubs, clubs/[id], roster/[teamId], player, player/[id], upload/training, upload/matches, billing
+- `/dashboard/player` — player-specific dashboard (performance comparison with teammates)
+- `/join` — public invitation acceptance page (`?token=...`)
+- `middleware.ts` — guards `/dashboard/*`, redirects unauthenticated users to `/login`
+
+### Sidebar nav
+
+The sidebar shows different nav items based on the current route — not the user's `profiles.role`:
+- Path starts with `/dashboard/player` → player nav (Mi rendimiento only)
+- Everything else → coach nav (Dashboard, Mis Clubes, Subir Datos, Suscripción)
+
+### Supabase TypeScript types
+
+The generated types in `@rubitrain/db` often produce `never` on nested selects. Workaround used throughout:
+```typescript
+const { data } = await (admin as any)
+  .from('table_name')
+  .select('*')
+  as { data: YourExplicitType | null }
+```
+
+### physical_status embed limitation
+
+`physical_status` has a FK to `profiles(id)` via `player_id`, but no FK to `team_memberships`. Embedding it inside a `team_memberships` select (`physical_status(status, is_current)`) silently fails — the query returns `null`. Always fetch it separately:
+
+```typescript
+// ❌ Silently returns null — no FK between team_memberships and physical_status
+.from('team_memberships').select('*, physical_status(status, is_current)')
+
+// ✅ Fetch separately
+const { data: statuses } = await admin.from('physical_status')
+  .select('player_id, status').in('player_id', playerIds).eq('is_current', true)
+```
 
 ### Excel Import Pipeline
-`POST /api/upload/training` and `/api/upload/matches` receive Excel files, parse with `xlsx`, validate, and bulk-insert into Supabase. Templates are generated server-side at `/api/templates/*`.
 
-### Billing (MercadoPago + WebPay)
-Three plans: Free (5 players), Pro ($14.900 CLP/mo, 30 players), Club ($44.900 CLP/mo, unlimited).
+`POST /api/upload/training` and `/api/upload/matches` receive Excel files, parse with `xlsx`, validate, and bulk-insert. Templates at `/api/templates/training` and `/api/templates/matches`.
 
-Two payment providers:
-- **MercadoPago** — suscripciones recurrentes automáticas via PreApproval API. Webhook en `/api/webhooks/mercadopago`.
-- **WebPay (Transbank)** — pago único manual que activa el plan por 30 días. Init en `/api/billing/webpay-init`, confirmación en `/api/billing/webpay-confirm`.
+### Billing
 
-Two billing models:
-- **Personal** (`billing_type='personal'`): el physical_trainer paga, cubre sus jugadores.
-- **Organización** (`billing_type='organization'`): el club paga, todos los miembros de la org quedan cubiertos. Los jugadores no necesitan pagar. La función SQL `get_effective_plan(user_id)` devuelve el plan efectivo (personal o del club).
+Three plans: Free (5 players), Pro ($14.900 CLP/mo, 30 players), Club ($44.900 CLP/mo, unlimited). Currently using trial buttons (`POST /api/billing/trial`) while MercadoPago/WebPay API keys are pending. SQL function `get_effective_plan(user_id)` returns the effective plan (personal or org-level).
 
-Feature gating llama a `get_effective_plan()` antes de verificar límites. Mobile no muestra pagos (App Store compliance) — redirige a la web.
+### Invitations email
 
-### Invitations
-`/api/invitations` creates signed tokens stored in the `invitations` table (7-day expiry) and sends emails via Resend. Acceptance creates the user + team membership.
+Resend `from` is `onboarding@resend.dev` (test domain) until `rubitrain.cl` is verified in Resend. When `emailError` is returned, the `/join` URL is displayed in the UI for manual sharing.
 
 ---
 
 ## Design System
 
-Mobile uses **NativeWind** (Tailwind for React Native) + **Lexend/Inter** fonts. Web uses **Tailwind CSS** + **shadcn/ui**. Color palette and typography are defined in SPEC-03 (mobile) and SPEC-04 (web) — follow them exactly.
+Web uses **Tailwind CSS**. Key colors: `#001e40` (dark navy, primary), `#0058bc` (blue, accent), `#83fc8e` (green, logo accent), `#f8f9fa` (light gray, backgrounds).
+
+Mobile uses **NativeWind** (Tailwind for React Native) + Lexend/Inter fonts.
 
 ---
 
-## Known Patterns & Gotchas
-
-### Supabase TypeScript types return `never` on nested selects
-When using `.select('*, related_table(*)')` or inserting into tables, the generated types in `@rubitrain/db` often produce `never`. Workaround used throughout the codebase:
-```typescript
-const { data } = await (supabase as any)
-  .from('table_name')
-  .select('...')
-  as { data: YourExplicitType | null }
-```
-This is intentional — do not remove the casts.
+## Known Gotchas
 
 ### Google OAuth setup
-- Supabase callback URL must be added to Google Cloud Console authorized redirect URIs: `https://lxnaizgzhiutxallmbvf.supabase.co/auth/v1/callback`
-- App callback is at `/api/auth/callback`
+- Supabase callback URL in Google Cloud Console: `https://lxnaizgzhiutxallmbvf.supabase.co/auth/v1/callback`
+- App callback: `/api/auth/callback` — supports `?next=` param for post-login redirect
 
 ### New Supabase key format
 - `NEXT_PUBLIC_SUPABASE_ANON_KEY` starts with `sb_publishable_...`
 - `SUPABASE_SERVICE_ROLE_KEY` starts with `sb_secret_...`
+
+### `APP_URL` in invitations
+`/api/invitations/route.ts` uses `NEXT_PUBLIC_APP_URL ?? 'http://localhost:3000'` to build the join link. Make sure this env var is set correctly in production.
