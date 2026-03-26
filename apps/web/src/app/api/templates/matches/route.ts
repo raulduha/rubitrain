@@ -1,39 +1,88 @@
+import { createAdminClient, createClient } from '@/lib/supabase/server'
 import * as XLSX from 'xlsx'
+import { NextResponse } from 'next/server'
 
-export async function GET() {
+const PARAM_COLS: Record<string, string> = {
+  vel_max: 'Vel_Max_kmh',
+  metros: 'Metros_Totales',
+  sprints: 'Sprints',
+  hsr: 'Metros_HSR',
+  estado: 'Estado',
+}
+
+export async function GET(req: Request) {
+  const url = new URL(req.url)
+  const teamId = url.searchParams.get('teamId')
+  const selectedParams = url.searchParams.getAll('p')
+
+  if (!teamId) return NextResponse.json({ error: 'teamId requerido' }, { status: 400 })
+
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return NextResponse.json({ error: 'No autorizado' }, { status: 401 })
+
+  const admin = await createAdminClient()
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const a = admin as any
+
+  const { data: team } = await a
+    .from('teams')
+    .select('name, category, organizations(owner_id)')
+    .eq('id', teamId)
+    .single() as { data: { name: string; category: string | null; organizations: { owner_id: string } } | null }
+
+  if (!team || team.organizations.owner_id !== user.id) {
+    return NextResponse.json({ error: 'Sin permisos' }, { status: 403 })
+  }
+
+  const { data: memberships } = await a
+    .from('team_memberships')
+    .select('user_id, profiles(full_name)')
+    .eq('team_id', teamId)
+    .eq('role', 'player')
+    .eq('is_active', true) as {
+      data: { user_id: string; profiles: { full_name: string } | null }[] | null
+    }
+
+  const players = (memberships ?? [])
+    .filter(m => m.profiles?.full_name)
+    .map(m => ({ id: m.user_id, name: m.profiles!.full_name }))
+
+  const paramCols = selectedParams.filter(p => PARAM_COLS[p]).map(p => PARAM_COLS[p]!)
+  const headers = ['Jugador_ID', 'Nombre_Jugador', 'Fecha_Partido', 'Rival', ...paramCols]
+
+  const today = new Date().toISOString().slice(0, 10)
+
+  const rows = players.map(p => {
+    const row: (string | null)[] = [p.id, p.name, today, '']
+    paramCols.forEach(() => row.push(''))
+    return row
+  })
+
   const wb = XLSX.utils.book_new()
+  const ws = XLSX.utils.aoa_to_sheet([headers, ...rows])
+  ws['!cols'] = headers.map(h => ({ wch: h === 'Jugador_ID' ? 38 : 20 }))
 
-  const headers = ['Email_Jugador', 'Fecha_Partido', 'Rival', 'Vel_Max_kmh', 'Metros_Totales', 'Sprints', 'Metros_HSR', 'Estado']
-
-  const ejemplos = [
-    ['juan@ejemplo.com', '2025-07-14', 'Old Boys RC', 31.2, 7200, 18, 1250, 'optimal'],
-    ['pedro@ejemplo.com', '2025-07-14', 'Old Boys RC', 28.5, 6800, 12, 980,  'optimal'],
-    ['carlos@ejemplo.com', '2025-07-14', 'Old Boys RC', 25.0, 4800, 8,  600,  'alert'],
-  ]
-
-  const ws = XLSX.utils.aoa_to_sheet([headers, ...ejemplos])
-  ws['!cols'] = headers.map(() => ({ wch: 18 }))
-
-  const ref = [
-    ['Columna', 'Descripción'],
-    ['Email_Jugador', 'Email del jugador registrado en la plataforma'],
-    ['Estado', 'optimal | fatigue | alert (opcional, se calcula auto)'],
-    ['', 'alert si Metros_Totales < 5000'],
-    ['', 'fatigue si Metros_Totales < 7000 y Sprints < 15'],
-    ['', 'optimal en cualquier otro caso'],
-  ]
-  const wsRef = XLSX.utils.aoa_to_sheet(ref)
+  const wsRef = XLSX.utils.aoa_to_sheet([
+    ['Instrucciones'],
+    [''],
+    ['- No modifiques Jugador_ID ni Nombre_Jugador'],
+    ['- Fecha_Partido: formato YYYY-MM-DD (ej: 2025-07-14)'],
+    ['- Estado: optimal | fatigue | alert (opcional, se calcula automáticamente)'],
+    ['- Deja en blanco las celdas sin dato'],
+    ['- Guarda como .xlsx antes de subir'],
+  ])
 
   XLSX.utils.book_append_sheet(wb, ws, 'Métricas')
-  XLSX.utils.book_append_sheet(wb, wsRef, 'Referencia')
+  XLSX.utils.book_append_sheet(wb, wsRef, 'Instrucciones')
 
+  const label = team.category ? `${team.name}_${team.category}` : team.name
   const rawBuf = XLSX.write(wb, { type: 'array', bookType: 'xlsx' }) as number[]
-  const buf = new Uint8Array(rawBuf)
 
-  return new Response(buf, {
+  return new Response(new Uint8Array(rawBuf), {
     headers: {
       'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-      'Content-Disposition': 'attachment; filename="template_metricas_partido.xlsx"',
+      'Content-Disposition': `attachment; filename="metricas_partido_${label}.xlsx"`,
     },
   })
 }

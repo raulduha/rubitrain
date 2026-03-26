@@ -34,7 +34,7 @@ export async function POST(req: Request) {
   const { data: invitation, error } = await (admin as any)
     .from('invitations')
     .insert({ team_id: teamId, invited_by: user.id, email, role })
-    .select()
+    .select('id, token')
     .single() as { data: { id: string; token: string } | null; error: { message: string } | null }
 
   if (error || !invitation) {
@@ -45,9 +45,19 @@ export async function POST(req: Request) {
   const joinUrl = `${APP_URL}/join?token=${invitation.token}`
   const roleLabel = role === 'player' ? 'jugador' : 'entrenador'
 
+  // In dev/test, Resend only delivers to the account owner's email.
+  // Set RESEND_TEST_EMAIL to your own address to receive all invitations while testing.
+  const testEmail = process.env.RESEND_TEST_EMAIL
+  const toAddress = testEmail ?? email
+  const testBanner = testEmail
+    ? `<p style="background:#fff3cd;border:1px solid #ffc107;color:#856404;padding:10px 14px;border-radius:8px;font-size:12px;margin-bottom:20px;">
+        🧪 <strong>Modo prueba</strong> — destinatario real: <strong>${email}</strong>
+       </p>`
+    : ''
+
   const { data: emailData, error: emailError } = await resend.emails.send({
     from: 'RubiTrain <onboarding@resend.dev>',
-    to: email,
+    to: toAddress,
     subject: `Te invitaron a unirte a ${team.name} en ${org?.name}`,
     html: `
       <div style="font-family:sans-serif;max-width:480px;margin:0 auto;padding:32px 24px;">
@@ -55,6 +65,7 @@ export async function POST(req: Request) {
           <span style="color:#83fc8e;font-size:28px;font-weight:900;">R</span>
           <span style="color:white;font-weight:700;font-size:18px;margin-left:8px;">RubiTrain</span>
         </div>
+        ${testBanner}
         <h2 style="color:#001e40;margin-bottom:8px;">Tienes una invitación</h2>
         <p style="color:#555;margin-bottom:24px;">
           Te invitaron a unirte como <strong>${roleLabel}</strong> al equipo

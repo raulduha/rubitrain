@@ -23,6 +23,7 @@ const COACH_NAV: NavItem[] = [
       { href: '/dashboard/upload/matches',  label: 'Partidos' },
     ],
   },
+  { href: '/dashboard/uploads',        label: 'Mis subidas',     icon: '📂' },
   { href: '/dashboard/billing',        label: 'Suscripción',     icon: '💳' },
 ]
 
@@ -38,7 +39,7 @@ export default function Sidebar({ profile }: Props) {
   const pathname = usePathname()
   const router = useRouter()
   const supabase = createClient()
-  const NAV = pathname.startsWith('/dashboard/player') ? PLAYER_NAV : COACH_NAV
+  const NAV = pathname === '/dashboard/player' ? PLAYER_NAV : COACH_NAV
   const [uploadOpen, setUploadOpen] = useState(
     pathname.startsWith('/dashboard/upload')
   )

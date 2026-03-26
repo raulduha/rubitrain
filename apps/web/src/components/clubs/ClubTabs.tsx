@@ -22,6 +22,7 @@ export default function ClubTabs({ org, teams: initialTeams, coaches }: Props) {
   const [creating, setCreating] = useState(false)
   const [showNewTeam, setShowNewTeam] = useState(false)
   const [createError, setCreateError] = useState<string | null>(null)
+  const [deletingTeamId, setDeletingTeamId] = useState<string | null>(null)
   const router = useRouter()
 
   async function handleCreateTeam(e: React.FormEvent) {
@@ -51,6 +52,16 @@ export default function ClubTabs({ org, teams: initialTeams, coaches }: Props) {
     setNewTeamName('')
     setShowNewTeam(false)
     setCreating(false)
+  }
+
+  async function handleDeleteTeam(teamId: string, teamName: string) {
+    if (!confirm(`¿Eliminar la categoría "${teamName}"? Se borrarán todos sus jugadores y datos asociados.`)) return
+    setDeletingTeamId(teamId)
+    const res = await fetch(`/api/teams/${teamId}`, { method: 'DELETE' })
+    if (res.ok) {
+      setTeams(prev => prev.filter(t => t.id !== teamId))
+    }
+    setDeletingTeamId(null)
   }
 
   const TABS = [
@@ -127,27 +138,31 @@ export default function ClubTabs({ org, teams: initialTeams, coaches }: Props) {
 
           <div className="space-y-2">
             {teams.map(team => (
-              <Link
-                key={team.id}
-                href={`/dashboard/roster/${team.id}`}
-                className="flex items-center justify-between bg-white border border-gray-100 rounded-xl px-5 py-4 hover:shadow-sm transition group"
-              >
-                <div className="flex items-center gap-4">
-                  <div className="w-9 h-9 bg-[#f8f9fa] rounded-lg flex items-center justify-center">
+              <div key={team.id} className="flex items-center bg-white border border-gray-100 rounded-xl px-5 py-4 hover:shadow-sm transition group">
+                <Link href={`/dashboard/roster/${team.id}`} className="flex items-center gap-4 flex-1 min-w-0">
+                  <div className="w-9 h-9 bg-[#f8f9fa] rounded-lg flex items-center justify-center shrink-0">
                     <span className="text-[#001e40] font-bold text-sm">{team.category?.toUpperCase().slice(0, 2)}</span>
                   </div>
-                  <div>
+                  <div className="min-w-0">
                     <p className="font-semibold text-[#001e40]">{team.name}</p>
                     <p className="text-xs text-gray-400">{team.category} · Temporada {team.season}</p>
                   </div>
-                </div>
-                <div className="flex items-center gap-4">
+                </Link>
+                <div className="flex items-center gap-4 shrink-0">
                   <span className="text-sm text-gray-400">
                     {(team.team_memberships as unknown as { count: number }[])?.[0]?.count ?? 0} jugadores
                   </span>
-                  <span className="text-gray-300 group-hover:text-[#0058bc]">→</span>
+                  <Link href={`/dashboard/roster/${team.id}`} className="text-gray-300 group-hover:text-[#0058bc]">→</Link>
+                  <button
+                    onClick={() => handleDeleteTeam(team.id, team.name)}
+                    disabled={deletingTeamId === team.id}
+                    className="text-gray-300 hover:text-red-500 transition disabled:opacity-40 text-lg leading-none"
+                    title="Eliminar categoría"
+                  >
+                    {deletingTeamId === team.id ? '...' : '×'}
+                  </button>
                 </div>
-              </Link>
+              </div>
             ))}
             {teams.length === 0 && (
               <p className="text-gray-400 text-sm text-center py-8">Sin categorías. Crea la primera.</p>

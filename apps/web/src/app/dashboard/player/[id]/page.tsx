@@ -2,6 +2,7 @@ import { createAdminClient, createClient } from '@/lib/supabase/server'
 import { notFound } from 'next/navigation'
 import Link from 'next/link'
 import PlayerTabs from '@/components/roster/PlayerTabs'
+import RemovePlayerButton from '@/components/roster/RemovePlayerButton'
 
 export default async function PlayerDetailPage({ params }: { params: { id: string } }) {
   const supabase = await createClient()
@@ -27,7 +28,7 @@ export default async function PlayerDetailPage({ params }: { params: { id: strin
     .eq('role', 'player')
     .eq('is_active', true)
     .limit(1)
-    .single() as { data: { id: string; position: string | null; position_group: string | null; jersey_number: number | null; weight_kg: number | null; height_cm: number | null; teams: { name: string; organizations: { owner_id: string; name: string } } } | null }
+    .single() as { data: { id: string; team_id: string; position: string | null; position_group: string | null; jersey_number: number | null; weight_kg: number | null; height_cm: number | null; teams: { name: string; organizations: { owner_id: string; name: string } } } | null }
 
   const org = membership?.teams
   if (!membership || org?.organizations.owner_id !== user!.id) notFound()
@@ -77,6 +78,11 @@ export default async function PlayerDetailPage({ params }: { params: { id: strin
                   {membership.position ?? 'Sin posición'} · {membership.position_group === 'forward' ? 'Forward' : membership.position_group === 'back' ? 'Back' : '—'}
                 </p>
               </div>
+              <RemovePlayerButton
+                membershipId={membership.id}
+                playerName={profile.full_name}
+                backHref={`/dashboard/roster/${membership.team_id}`}
+              />
               {currentStatus && (
                 <span className={`text-xs px-3 py-1.5 rounded-full font-medium ${
                   currentStatus.status === 'fit' ? 'bg-green-50 text-green-700' :

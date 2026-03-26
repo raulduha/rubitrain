@@ -1,41 +1,88 @@
+import { createAdminClient, createClient } from '@/lib/supabase/server'
 import * as XLSX from 'xlsx'
+import { NextResponse } from 'next/server'
 
-export async function GET() {
+const PARAM_COLS: Record<string, string> = {
+  squat: 'Squat_kg',
+  deadlift: 'Deadlift_kg',
+  bench: 'Bench_kg',
+  power_clean: 'Power_Clean_kg',
+  tonnage: 'Tonnage_kg',
+  notas: 'Notas',
+}
+
+export async function GET(req: Request) {
+  const url = new URL(req.url)
+  const teamId = url.searchParams.get('teamId')
+  const selectedParams = url.searchParams.getAll('p')
+
+  if (!teamId) return NextResponse.json({ error: 'teamId requerido' }, { status: 400 })
+
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return NextResponse.json({ error: 'No autorizado' }, { status: 401 })
+
+  const admin = await createAdminClient()
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const a = admin as any
+
+  const { data: team } = await a
+    .from('teams')
+    .select('name, category, organizations(owner_id)')
+    .eq('id', teamId)
+    .single() as { data: { name: string; category: string | null; organizations: { owner_id: string } } | null }
+
+  if (!team || team.organizations.owner_id !== user.id) {
+    return NextResponse.json({ error: 'Sin permisos' }, { status: 403 })
+  }
+
+  const { data: memberships } = await a
+    .from('team_memberships')
+    .select('user_id, profiles(full_name)')
+    .eq('team_id', teamId)
+    .eq('role', 'player')
+    .eq('is_active', true) as {
+      data: { user_id: string; profiles: { full_name: string } | null }[] | null
+    }
+
+  const players = (memberships ?? [])
+    .filter(m => m.profiles?.full_name)
+    .map(m => ({ id: m.user_id, name: m.profiles!.full_name }))
+
+  const paramCols = selectedParams.filter(p => PARAM_COLS[p]).map(p => PARAM_COLS[p]!)
+  const headers = ['Jugador_ID', 'Nombre_Jugador', 'Fecha', ...paramCols]
+
+  const today = new Date().toISOString().slice(0, 10)
+
+  const rows = players.map(p => {
+    const row: (string | null)[] = [p.id, p.name, today]
+    paramCols.forEach(() => row.push(''))
+    return row
+  })
+
   const wb = XLSX.utils.book_new()
+  const ws = XLSX.utils.aoa_to_sheet([headers, ...rows])
+  ws['!cols'] = headers.map(h => ({ wch: h === 'Jugador_ID' ? 38 : 20 }))
 
-  const headers = [
-    'Fecha', 'Titulo_Sesion', 'Tipo_Sesion', 'Grupo_Objetivo',
-    'Nombre_Ejercicio', 'Categoria_Ejercicio', 'Series', 'Reps',
-    'Distancia_m', 'Descanso_s', 'Intensidad', 'Notas',
-  ]
+  const wsRef = XLSX.utils.aoa_to_sheet([
+    ['Instrucciones'],
+    [''],
+    ['- No modifiques Jugador_ID ni Nombre_Jugador'],
+    ['- Fecha: formato YYYY-MM-DD (ej: 2025-07-14)'],
+    ['- Deja en blanco las celdas sin dato'],
+    ['- Guarda como .xlsx antes de subir'],
+  ])
 
-  const ejemplos = [
-    ['2025-07-07', 'Fuerza Máxima Lunes', 'strength', 'forwards', 'Sentadilla Trasera', 'compound', 5, 5, '', 180, 'Pesado', ''],
-    ['2025-07-07', 'Fuerza Máxima Lunes', 'strength', 'backs',    'Power Clean',        'compound', 6, 2, '', 120, 'Dinámico', 'Barra olímpica'],
-    ['2025-07-07', 'Fuerza Máxima Lunes', 'strength', 'all',      'Peso Muerto',        'compound', 4, 4, '', 150, 'Pesado', ''],
-  ]
+  XLSX.utils.book_append_sheet(wb, ws, 'Rendimiento')
+  XLSX.utils.book_append_sheet(wb, wsRef, 'Instrucciones')
 
-  const ws = XLSX.utils.aoa_to_sheet([headers, ...ejemplos])
-  ws['!cols'] = headers.map(() => ({ wch: 18 }))
-
-  const ref = [
-    ['Columna', 'Valores posibles'],
-    ['Tipo_Sesion', 'strength | speed | technical | recovery | match_prep'],
-    ['Grupo_Objetivo', 'all | forwards | backs'],
-    ['Intensidad', 'Pesado | Máximo | Volumen | Dinámico | Altura | 100%'],
-  ]
-  const wsRef = XLSX.utils.aoa_to_sheet(ref)
-
-  XLSX.utils.book_append_sheet(wb, ws, 'Rutina')
-  XLSX.utils.book_append_sheet(wb, wsRef, 'Referencia')
-
+  const label = team.category ? `${team.name}_${team.category}` : team.name
   const rawBuf = XLSX.write(wb, { type: 'array', bookType: 'xlsx' }) as number[]
-  const buf = new Uint8Array(rawBuf)
 
-  return new Response(buf, {
+  return new Response(new Uint8Array(rawBuf), {
     headers: {
       'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-      'Content-Disposition': 'attachment; filename="template_rutinas.xlsx"',
+      'Content-Disposition': `attachment; filename="rendimiento_${label}.xlsx"`,
     },
   })
 }

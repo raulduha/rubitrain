@@ -20,9 +20,33 @@ const STATUS_LABELS: Record<string, string> = {
   fit: 'Apto', limited: 'Limitado', injured: 'Lesionado', recovering: 'Recuperación',
 }
 
-export default function RosterTable({ players, teamId }: { players: Player[]; teamId: string }) {
+export default function RosterTable({ players: initialPlayers, teamId }: { players: Player[]; teamId: string }) {
+  const [players, setPlayers] = useState(initialPlayers)
   const [search, setSearch] = useState('')
   const [groupFilter, setGroupFilter] = useState<'all' | 'forward' | 'back'>('all')
+  const [deletingId, setDeletingId] = useState<string | null>(null)
+  const [updatingGroup, setUpdatingGroup] = useState<string | null>(null)
+
+  async function handleSetGroup(membershipId: string, group: 'forward' | 'back' | null) {
+    setUpdatingGroup(membershipId)
+    const res = await fetch(`/api/memberships/${membershipId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ position_group: group }),
+    })
+    if (res.ok) {
+      setPlayers(prev => prev.map(p => p.id === membershipId ? { ...p, position_group: group } : p))
+    }
+    setUpdatingGroup(null)
+  }
+
+  async function handleRemovePlayer(membershipId: string, name: string) {
+    if (!confirm(`¿Quitar a ${name} del equipo?`)) return
+    setDeletingId(membershipId)
+    const res = await fetch(`/api/memberships/${membershipId}`, { method: 'DELETE' })
+    if (res.ok) setPlayers(prev => prev.filter(p => p.id !== membershipId))
+    setDeletingId(null)
+  }
 
   const filtered = players.filter(p => {
     const name = p.profiles?.full_name?.toLowerCase() ?? ''
@@ -102,15 +126,27 @@ export default function RosterTable({ players, teamId }: { players: Player[]; te
                     </div>
                   </td>
                   <td className="px-5 py-3.5">
-                    {p.position ? (
-                      <span className={`text-xs px-2 py-1 rounded-full font-medium ${
-                        p.position_group === 'forward'
-                          ? 'bg-blue-50 text-blue-700'
-                          : 'bg-purple-50 text-purple-700'
-                      }`}>
-                        {p.position}
-                      </span>
-                    ) : <span className="text-gray-300">—</span>}
+                    <div className="flex flex-col gap-1">
+                      {p.position && (
+                        <span className="text-xs text-gray-500">{p.position}</span>
+                      )}
+                      <div className={`flex gap-0.5 ${updatingGroup === p.id ? 'opacity-50' : ''}`}>
+                        {(['forward', 'back', null] as const).map(g => (
+                          <button
+                            key={String(g)}
+                            onClick={() => handleSetGroup(p.id, g)}
+                            disabled={updatingGroup === p.id}
+                            className={`px-2 py-0.5 rounded text-xs font-medium transition ${
+                              p.position_group === g
+                                ? g === 'forward' ? 'bg-blue-100 text-blue-700' : g === 'back' ? 'bg-purple-100 text-purple-700' : 'bg-gray-100 text-gray-500'
+                                : 'text-gray-300 hover:text-gray-500'
+                            }`}
+                          >
+                            {g === 'forward' ? 'FW' : g === 'back' ? 'BK' : '—'}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
                   </td>
                   <td className="px-5 py-3.5 text-gray-600">{p.weight_kg ? `${p.weight_kg} kg` : '—'}</td>
                   <td className="px-5 py-3.5 text-gray-600">{p.height_cm ? `${p.height_cm} cm` : '—'}</td>
@@ -121,12 +157,22 @@ export default function RosterTable({ players, teamId }: { players: Player[]; te
                     </span>
                   </td>
                   <td className="px-5 py-3.5 text-right">
-                    <Link
-                      href={`/dashboard/player/${p.user_id}`}
-                      className="text-xs text-[#0058bc] hover:underline font-medium"
-                    >
-                      Ver perfil →
-                    </Link>
+                    <div className="flex items-center justify-end gap-3">
+                      <Link
+                        href={`/dashboard/player/${p.user_id}`}
+                        className="text-xs text-[#0058bc] hover:underline font-medium"
+                      >
+                        Ver perfil →
+                      </Link>
+                      <button
+                        onClick={() => handleRemovePlayer(p.id, p.profiles?.full_name ?? 'jugador')}
+                        disabled={deletingId === p.id}
+                        className="text-gray-300 hover:text-red-500 transition disabled:opacity-40 text-lg leading-none"
+                        title="Quitar del equipo"
+                      >
+                        {deletingId === p.id ? '...' : '×'}
+                      </button>
+                    </div>
                   </td>
                 </tr>
               ))}

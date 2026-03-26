@@ -67,24 +67,22 @@ export default function InvitePlayerButton({ teamId, teamName }: Props) {
                   )}
                 </div>
 
-                {result.joinUrl && (
-                  <div className="bg-[#f8f9fa] rounded-xl p-3 mb-4">
-                    <p className="text-xs text-gray-500 mb-1">Link de invitación:</p>
-                    <div className="flex items-center gap-2">
-                      <input
-                        readOnly
-                        value={result.joinUrl}
-                        className="flex-1 text-xs bg-white border border-gray-200 rounded-lg px-2 py-1.5 text-gray-700 truncate"
-                      />
-                      <button
-                        onClick={() => navigator.clipboard.writeText(result.joinUrl!)}
-                        className="text-xs bg-[#001e40] text-white px-3 py-1.5 rounded-lg font-medium shrink-0"
-                      >
-                        Copiar
-                      </button>
-                    </div>
+                <div className="bg-[#f8f9fa] rounded-xl p-3 mb-4">
+                  <p className="text-xs text-gray-500 mb-1">Link de invitación:</p>
+                  <div className="flex items-center gap-2">
+                    <input
+                      readOnly
+                      value={result.joinUrl ?? ''}
+                      className="flex-1 text-xs bg-white border border-gray-200 rounded-lg px-2 py-1.5 text-gray-700 truncate"
+                    />
+                    <button
+                      onClick={() => result.joinUrl && navigator.clipboard.writeText(result.joinUrl)}
+                      className="text-xs bg-[#001e40] text-white px-3 py-1.5 rounded-lg font-medium shrink-0"
+                    >
+                      Copiar
+                    </button>
                   </div>
-                )}
+                </div>
 
                 <div className="flex gap-3">
                   <button
