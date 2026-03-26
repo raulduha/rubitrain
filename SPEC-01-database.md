@@ -208,18 +208,33 @@ created_at timestamptz default now()
 ---
 
 #### 12. subscriptions
-Estado de suscripción Stripe por physical_trainer.
+Estado de suscripción por physical_trainer o por organización (club).
+Soporta dos modelos de billing: personal (el preparador paga) y organizacional (el club paga y cubre a todos sus miembros).
 ```sql
 id uuid primary key default gen_random_uuid()
-owner_id uuid references profiles(id) unique
-stripe_customer_id text unique
-stripe_subscription_id text
+-- Quién paga (siempre un physical_trainer)
+payer_id uuid references profiles(id) not null
+-- Si es plan de club: la organización que queda cubierta
+organization_id uuid references organizations(id)
+-- Tipo de suscripción
+billing_type text default 'personal' check (billing_type in ('personal', 'organization'))
+-- Proveedor de pago
+payment_provider text check (payment_provider in ('mercadopago', 'webpay', null))
+-- IDs externos
+mp_preapproval_id text unique        -- MercadoPago suscripción recurrente
+mp_customer_id text                  -- MercadoPago payer ID
+webpay_token text                    -- WebPay token (pagos manuales)
 plan text default 'free' check (plan in ('free', 'pro', 'club'))
 status text default 'active' check (status in ('active', 'past_due', 'cancelled', 'trialing'))
 active_players_count int default 0
 current_period_end timestamptz
 created_at timestamptz default now()
 updated_at timestamptz default now()
+
+-- Un payer solo puede tener una suscripción activa
+unique(payer_id)
+-- Una organización solo puede tener un plan de club activo
+unique(organization_id)
 ```
 
 ---
@@ -265,6 +280,7 @@ Habilitar RLS en TODAS las tablas. Políticas principales:
 2. `update_updated_at()` - trigger genérico para updated_at
 3. `count_active_players(org_id)` - función para contar jugadores activos (billing)
 4. `accept_invitation(token, user_id)` - función que acepta invitación y crea membership
+5. `get_effective_plan(user_id)` - retorna el plan efectivo del usuario: primero busca si pertenece a una organización con `billing_type = 'organization'` y plan activo, si no, busca su suscripción personal. Retorna `'free'` si no hay ninguna.
 
 ---
 

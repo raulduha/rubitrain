@@ -241,14 +241,16 @@ Crear `apps/mobile/src/hooks/useAuth.ts`:
 // Debe manejar:
 // - Estado: session, user, profile, loading
 // - signIn(email, password)
-// - signUp(email, password, fullName, role)
+// - signInWithGoogle()  ← OAuth via Supabase + expo-web-browser
+// - signUp(email, password, fullName, role) → retorna { needsEmailVerification: true }
 // - signOut()
 // - updateProfile(data)
 // - Escuchar cambios con supabase.auth.onAuthStateChange
 // - Al hacer signIn, cargar perfil desde tabla profiles
-// - Redirigir según rol: 
+// - Redirigir según rol:
 //   physical_trainer/coach → (tabs)/index
 //   player → (tabs)/profile
+// - Si session existe pero email no confirmado → redirigir a (auth)/verify-email
 ```
 
 ---
@@ -279,21 +281,49 @@ EXPO_PUBLIC_SUPABASE_ANON_KEY=eyJxxx
 NEXT_PUBLIC_SUPABASE_URL=https://xxxx.supabase.co
 NEXT_PUBLIC_SUPABASE_ANON_KEY=eyJxxx
 SUPABASE_SERVICE_ROLE_KEY=eyJxxx
-STRIPE_SECRET_KEY=sk_test_xxx
-STRIPE_WEBHOOK_SECRET=whsec_xxx
+# MercadoPago
+MP_ACCESS_TOKEN=APP_USR-xxx
+MP_PUBLIC_KEY=APP_USR-xxx
+MP_WEBHOOK_SECRET=xxx
+# WebPay (Transbank)
+WEBPAY_COMMERCE_CODE=xxx
+WEBPAY_API_KEY=xxx
+WEBPAY_ENVIRONMENT=integration   # o 'production'
+# Emails
 RESEND_API_KEY=re_xxx
+# Google OAuth (configurar también en Supabase dashboard)
+NEXT_PUBLIC_GOOGLE_CLIENT_ID=xxx.apps.googleusercontent.com
+# App
 NEXT_PUBLIC_APP_URL=http://localhost:3000
+```
+
+**apps/mobile/.env.example:**
+```
+EXPO_PUBLIC_SUPABASE_URL=https://xxxx.supabase.co
+EXPO_PUBLIC_SUPABASE_ANON_KEY=eyJxxx
+EXPO_PUBLIC_GOOGLE_CLIENT_ID=xxx.apps.googleusercontent.com
 ```
 
 ---
 
 ### PASO 9: Pantallas de Auth Mobile
 
+Instalar dependencias adicionales para OAuth:
+```bash
+pnpm add expo-web-browser expo-auth-session
+```
+
+Configurar Google OAuth en Supabase:
+- Dashboard → Authentication → Providers → Google → habilitar
+- Agregar `EXPO_PUBLIC_GOOGLE_CLIENT_ID` al .env
+
 Crear pantallas en `apps/mobile/src/app/(auth)/`:
 
 **login.tsx:**
 - Input email + password
 - Botón "Iniciar Sesión"
+- Separador "— o continuar con —"
+- Botón "Continuar con Google" (ícono Google + texto, fondo blanco)
 - Link "¿Olvidaste tu contraseña?"
 - Link "Registrarse"
 - Manejo de error con toast/alert
@@ -304,7 +334,39 @@ Crear pantallas en `apps/mobile/src/app/(auth)/`:
 - Input nombre completo, email, password, confirm password
 - Selector de rol: "Soy Preparador Físico" / "Soy Entrenador"
   (los jugadores se registran solo por invitación)
+- Botón "Registrarme con Google" (crea cuenta con rol a seleccionar antes)
 - Validación con Zod
+- Al registrarse con email → redirigir a verify-email.tsx
+
+**verify-email.tsx:**
+- Pantalla intermedia: "Verifica tu correo"
+- Texto: "Enviamos un enlace a [email]. Revisa tu bandeja de entrada."
+- Botón "Reenviar correo" (con cooldown de 60 segundos)
+- Botón "Ya verifiqué → Continuar" (refresca sesión y redirige si está confirmado)
+- Link "Cambiar email" → vuelve a register
+
+**forgot-password.tsx:**
+- Input email
+- Botón "Enviar link de recuperación"
+- Usa `supabase.auth.resetPasswordForEmail`
+- Mensaje de éxito: "Revisa tu correo"
+
+#### Páginas web de Auth (`apps/web/src/app/(auth)/`):
+
+**login/page.tsx:**
+- Formulario email + password
+- Botón "Iniciar sesión con Google"
+- Link a register
+- Redirect a /dashboard si hay sesión activa
+
+**register/page.tsx:**
+- Formulario nombre, email, password, confirm password, rol
+- Botón "Registrarse con Google"
+- Tras registro por email → mostrar banner "Revisa tu correo para confirmar tu cuenta"
+
+**verify-email/page.tsx:**
+- Página que Supabase carga al confirmar email (configurar como redirect URL)
+- Extrae token de la URL → confirma con Supabase → redirige a /dashboard
 
 ---
 

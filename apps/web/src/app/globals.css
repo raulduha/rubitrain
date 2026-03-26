@@ -1,0 +1,16 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+
+:root {
+  --color-primary: #001e40;
+  --color-secondary: #0058bc;
+  --color-tertiary: #83fc8e;
+}
+
+body {
+  background-color: #f8f9fa;
+  color: #001e40;
+}
